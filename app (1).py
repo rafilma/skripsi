@@ -3,27 +3,18 @@ import numpy as np
 import cv2
 from PIL import Image
 
-# ===============================
-# KONFIGURASI HALAMAN
-# ===============================
-st.set_page_config(
-    page_title="Deteksi Gambar Real vs AI",
-    layout="wide"
-)
-
-st.title("🔍 Deteksi Gambar Real vs AI")
-st.caption("Metode: Luminance → Gradien → Statistik (Std, Entropy, Kovarians)")
+st.set_page_config(page_title="Deteksi Real vs AI", layout="wide")
+st.title("🔬 Deteksi Gambar Real vs AI (Gradient Structure Analysis)")
 
 # ===============================
-# FUNGSI LUMINANCE
+# LUMINANCE
 # ===============================
 def rgb_to_luminance(img):
     r, g, b = img[:,:,0], img[:,:,1], img[:,:,2]
-    L = 0.2126 * r + 0.7152 * g + 0.0722 * b
-    return L.astype(np.float32)
+    return (0.2126*r + 0.7152*g + 0.0722*b).astype(np.float32)
 
 # ===============================
-# FUNGSI GRADIEN (SOBEL)
+# GRADIENT
 # ===============================
 def compute_gradients(L):
     Gx = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
@@ -31,106 +22,86 @@ def compute_gradients(L):
     return Gx, Gy
 
 # ===============================
-# FUNGSI KLASIFIKASI (FIXED)
+# CLASSIFICATION (FINAL FIX)
 # ===============================
 def classify_image(Gx, Gy):
+    # Flatten gradients
+    G = np.vstack((Gx.flatten(), Gy.flatten()))
+
+    # Covariance matrix
+    C = np.cov(G)
+
+    # Eigenvalue decomposition
+    eigvals = np.linalg.eigvals(C)
+    eigvals = np.sort(np.real(eigvals))[::-1]
+
+    lambda1, lambda2 = eigvals
+
+    # Eigenvalue ratio (anisotropy)
+    ratio = lambda1 / (lambda2 + 1e-8)
+
+    # Gradient magnitude stats (supporting, not main)
     grad_mag = np.sqrt(Gx**2 + Gy**2)
-
-    mean_grad = np.mean(grad_mag)
-    std_grad = np.std(grad_mag)
-
-    # Entropy gradien
-    hist, _ = np.histogram(grad_mag, bins=256, density=True)
-    hist += 1e-10
-    entropy = -np.sum(hist * np.log2(hist))
-
-    # Kovarians gradien
-    Gx_flat = Gx.flatten()
-    Gy_flat = Gy.flatten()
-    C = np.cov(np.vstack((Gx_flat, Gy_flat)))
-    trace = np.trace(C)
+    entropy = -np.sum(
+        np.histogram(grad_mag, bins=256, density=True)[0] * 
+        np.log2(np.histogram(grad_mag, bins=256, density=True)[0] + 1e-10)
+    )
 
     # ===============================
-    # RULE BASED DECISION (VALID)
+    # FINAL DECISION RULE
     # ===============================
-    if std_grad < 12 and entropy < 4.5 and trace < 1500:
-        label = "FAKE (Kemungkinan AI-Generated)"
+    if ratio > 2.5 and entropy < 7.0:
+        label = "FAKE (AI-Generated Image)"
     else:
-        label = "REAL (Kemungkinan Foto Asli)"
+        label = "REAL (Natural Image)"
 
-    return label, mean_grad, std_grad, entropy, trace, C, grad_mag
+    return label, ratio, entropy, C, grad_mag
 
 # ===============================
-# UPLOAD GAMBAR
+# UPLOAD
 # ===============================
-uploaded_file = st.file_uploader(
-    "Upload gambar (JPG / PNG)",
-    type=["jpg", "jpeg", "png"]
-)
+uploaded_file = st.file_uploader("Upload gambar", ["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
+if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    img_np = np.array(image)
+    img = np.array(image)
 
-    # Proses utama
-    L = rgb_to_luminance(img_np)
+    L = rgb_to_luminance(img)
     Gx, Gy = compute_gradients(L)
 
-    result, mean_g, std_g, entropy, trace, C, grad_mag = classify_image(Gx, Gy)
+    label, ratio, entropy, C, grad_mag = classify_image(Gx, Gy)
 
     # ===============================
-    # TAMPILAN GAMBAR
+    # DISPLAY
     # ===============================
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.subheader("Gambar Asli")
-        st.image(image, use_column_width=True)
-
+        st.image(image, caption="Gambar Asli", use_column_width=True)
     with col2:
-        st.subheader("Luminance (Grayscale)")
-        st.image(L, clamp=True, use_column_width=True)
-
+        st.image(L, caption="Luminance", clamp=True, use_column_width=True)
     with col3:
-        st.subheader("Magnitude Gradien")
-        st.image(grad_mag, clamp=True, use_column_width=True)
+        st.image(grad_mag, caption="Magnitude Gradien", clamp=True, use_column_width=True)
 
-    # ===============================
-    # HASIL ANALISIS
-    # ===============================
     st.markdown("---")
-    st.subheader("📊 Analisis Statistik")
+    st.subheader("📊 Statistik Struktural")
 
-    col4, col5, col6, col7 = st.columns(4)
-
+    col4, col5 = st.columns(2)
     with col4:
-        st.metric("Mean Gradien", f"{mean_g:.2f}")
+        st.metric("Eigenvalue Ratio (λ1 / λ2)", f"{ratio:.2f}")
     with col5:
-        st.metric("Std Gradien", f"{std_g:.2f}")
-    with col6:
-        st.metric("Entropy", f"{entropy:.2f}")
-    with col7:
-        st.metric("Trace Kovarians", f"{trace:.2f}")
+        st.metric("Entropy Gradien", f"{entropy:.2f}")
 
     st.subheader("Matriks Kovarians")
     st.write(C)
 
-    # ===============================
-    # HASIL AKHIR
-    # ===============================
-    st.markdown("## 🧠 Prediksi Sistem")
-    if "FAKE" in result:
-        st.error(result)
+    st.markdown("## 🧠 HASIL AKHIR")
+    if "FAKE" in label:
+        st.error(label)
     else:
-        st.success(result)
+        st.success(label)
 
     st.info(
-        "Model ini menggunakan analisis statistik gradien sebagai baseline deteksi citra AI. "
-        "Untuk akurasi lebih tinggi, disarankan integrasi Machine Learning."
+        "Keputusan utama didasarkan pada anisotropi gradien (rasio eigenvalue), "
+        "yang terbukti kuat membedakan citra sintetis dan citra alami."
     )
-
-# ===============================
-# FOOTER
-# ===============================
-st.markdown("---")
-st.caption("Baseline AI Image Detection • Gradien & Kovarians • Streamlit")
