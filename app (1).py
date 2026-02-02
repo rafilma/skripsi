@@ -4,53 +4,53 @@ import cv2
 from PIL import Image
 
 st.set_page_config(page_title="Deteksi Real vs AI", layout="wide")
-st.title("🔬 Deteksi Gambar Real vs AI (Gradient Structure Analysis)")
+st.title("🔬 Deteksi Gambar Real vs AI")
+st.caption("Metode: Grayscale → Gradien → Struktur Kovarians")
 
 # ===============================
-# LUMINANCE
+# PREPROCESSING YANG BENAR
 # ===============================
-def rgb_to_luminance(img):
-    r, g, b = img[:,:,0], img[:,:,1], img[:,:,2]
-    return (0.2126*r + 0.7152*g + 0.0722*b).astype(np.float32)
+def preprocess_image(img_rgb):
+    # RGB → Grayscale OpenCV (VALID)
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+
+    # Pastikan uint8
+    gray = gray.astype(np.uint8)
+    return gray
 
 # ===============================
-# GRADIENT
+# GRADIENT (SOBEL)
 # ===============================
-def compute_gradients(L):
-    Gx = cv2.Sobel(L, cv2.CV_32F, 1, 0, ksize=3)
-    Gy = cv2.Sobel(L, cv2.CV_32F, 0, 1, ksize=3)
+def compute_gradients(gray):
+    Gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    Gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     return Gx, Gy
 
 # ===============================
-# CLASSIFICATION (FINAL FIX)
+# KLASIFIKASI STRUKTURAL (VALID)
 # ===============================
 def classify_image(Gx, Gy):
-    # Flatten gradients
+    # Gradient structure
     G = np.vstack((Gx.flatten(), Gy.flatten()))
-
-    # Covariance matrix
     C = np.cov(G)
 
-    # Eigenvalue decomposition
+    # Eigenvalues
     eigvals = np.linalg.eigvals(C)
     eigvals = np.sort(np.real(eigvals))[::-1]
-
     lambda1, lambda2 = eigvals
 
-    # Eigenvalue ratio (anisotropy)
     ratio = lambda1 / (lambda2 + 1e-8)
 
-    # Gradient magnitude stats (supporting, not main)
+    # Gradient magnitude entropy
     grad_mag = np.sqrt(Gx**2 + Gy**2)
-    entropy = -np.sum(
-        np.histogram(grad_mag, bins=256, density=True)[0] * 
-        np.log2(np.histogram(grad_mag, bins=256, density=True)[0] + 1e-10)
-    )
+    hist, _ = np.histogram(grad_mag, bins=256, density=True)
+    hist += 1e-10
+    entropy = -np.sum(hist * np.log2(hist))
 
     # ===============================
-    # FINAL DECISION RULE
+    # FINAL RULE (KONSISTEN)
     # ===============================
-    if ratio > 2.5 and entropy < 7.0:
+    if ratio > 3.0 and entropy < 6.5:
         label = "FAKE (AI-Generated Image)"
     else:
         label = "REAL (Natural Image)"
@@ -64,10 +64,10 @@ uploaded_file = st.file_uploader("Upload gambar", ["jpg", "jpeg", "png"])
 
 if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    img = np.array(image)
+    img_rgb = np.array(image)
 
-    L = rgb_to_luminance(img)
-    Gx, Gy = compute_gradients(L)
+    gray = preprocess_image(img_rgb)
+    Gx, Gy = compute_gradients(gray)
 
     label, ratio, entropy, C, grad_mag = classify_image(Gx, Gy)
 
@@ -78,13 +78,15 @@ if uploaded_file:
 
     with col1:
         st.image(image, caption="Gambar Asli", use_column_width=True)
+
     with col2:
-        st.image(L, caption="Luminance", clamp=True, use_column_width=True)
+        st.image(gray, caption="Grayscale (Benar)", use_column_width=True)
+
     with col3:
         st.image(grad_mag, caption="Magnitude Gradien", clamp=True, use_column_width=True)
 
     st.markdown("---")
-    st.subheader("📊 Statistik Struktural")
+    st.subheader("📊 Analisis Statistik")
 
     col4, col5 = st.columns(2)
     with col4:
@@ -102,6 +104,6 @@ if uploaded_file:
         st.success(label)
 
     st.info(
-        "Keputusan utama didasarkan pada anisotropi gradien (rasio eigenvalue), "
-        "yang terbukti kuat membedakan citra sintetis dan citra alami."
+        "Keputusan didasarkan pada struktur gradien global (anisotropi), "
+        "bukan sekadar kekuatan tepi."
     )
